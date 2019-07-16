@@ -40,9 +40,15 @@ impl Interpreter{
         if self.done{
             return InterpreterResult::Stopped;
         }
-        
+        //self.step_inner(ext);
         InterpreterResult::Done
+    }
+    fn step_inner(&mut self, ext: &mut Ext) -> Result<Never, InterpreterResult> {
+
+
+        Err(InterpreterResult::Continue)
     }
 }
 
 pub trait Ext {}
+enum Never {}

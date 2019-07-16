@@ -24,7 +24,7 @@ fn from_biguint(x: BigUint) -> U256 {
 }
 
 pub struct Interpreter{
-
+    done: bool,
 }
 
 impl Interpreter{
@@ -37,6 +37,10 @@ impl Interpreter{
 
 impl Interpreter{
     pub fn step(&mut self, ext: &mut Ext)->InterpreterResult{
+        if self.done{
+            return InterpreterResult::Stopped;
+        }
+        
         InterpreterResult::Done
     }
 }

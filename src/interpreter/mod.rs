@@ -1,4 +1,5 @@
 mod instructions;
+mod stack;
 
 use bit_set::BitSet;
 use bytes::Bytes;
@@ -8,6 +9,7 @@ use num_bigint::BigUint;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::{cmp, mem};
+use stack::*;
 
 /// Stepping result returned by interpreter.
 pub enum InterpreterResult {
@@ -112,7 +114,7 @@ pub struct Interpreter {
     done: bool,
     valid_jump_destinations: Option<Arc<BitSet>>,
     //gasometer: Option<Gasometer<Cost>>,
-    //stack: VecStack<U256>,
+    stack: VecStack<U256>,
     resume_output_range: Option<(U256, U256)>,
     resume_result: Option<InstructionResult>,
     last_stack_ret_len: usize,
@@ -128,6 +130,7 @@ impl Interpreter {
 }
 
 impl Interpreter {
+
     pub fn step(&mut self, ext: &mut Ext) -> InterpreterResult {
         if self.done {
             return InterpreterResult::Stopped;
@@ -142,12 +145,52 @@ impl Interpreter {
                 let opcode = self.reader.code[self.reader.position];
                 let instruction = Instruction::from_u8(opcode);
 
+                let instruction = match instruction {
+                    Some(i) => i,
+                    None => return Err(InterpreterResult::Done),
+                };
+
+                let info = instruction.info();
+                self.last_stack_ret_len = info.ret;
+                //self.verify_instruction(ext, instruction, info)?;
+
+                // Execute instruction
+                let requirements_gas = 0;
+                let current_gas = 0; //self.gasometer.as_mut().expect(GASOMETER_PROOF).current_gas;
+                let result =
+                    self.exec_instruction(current_gas, ext, instruction, requirements_gas)?;
+
                 InstructionResult::Ok
             }
         };
         Err(InterpreterResult::Continue)
     }
+    fn exec_instruction(
+        &mut self,
+        gas: usize,
+        ext: &mut Ext,
+        instruction: Instruction,
+        provided: usize,
+    ) -> Result<InstructionResult,PubErr> {
+        match instruction {
+            instructions::JUMP=>{
+                let jump = self.stack.pop_back();
+                return Ok(InstructionResult::JumpToPosition(jump));
+            },
+            _=> {},
+        }
+        Err(PubErr::None)
+    }
 }
 
 pub trait Ext {}
 enum Never {}
+
+enum PubErr{
+    None,
+}
+impl From<PubErr> for InterpreterResult {
+	fn from(err: PubErr) -> Self {
+		InterpreterResult::Done
+	}
+}

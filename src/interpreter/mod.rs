@@ -1,11 +1,13 @@
-use std::marker::PhantomData;
-use std::sync::Arc;
-use std::{cmp, mem};
+mod instructions;
+
 use bit_set::BitSet;
 use bytes::Bytes;
 use ethereum_types::{Address, H256, U256};
+use instructions::Instruction;
 use num_bigint::BigUint;
-
+use std::marker::PhantomData;
+use std::sync::Arc;
+use std::{cmp, mem};
 
 /// Stepping result returned by interpreter.
 pub enum InterpreterResult {
@@ -47,48 +49,45 @@ struct InterpreterParams {
 }
 
 enum InstructionResult {
-	Ok,
-	//UnusedGas(Gas),
-	JumpToPosition(U256),
-	StopExecutionNeedsReturn {
-		// Gas left.
-		//gas: Gas,
-		/// Return data offset.
-		init_off: U256,
-		/// Return data size.
-		init_size: U256,
-		/// Apply or revert state changes.
-		apply: bool,
-	},
-	StopExecution,
-	Trap,//(TrapKind),
+    Ok,
+    //UnusedGas(Gas),
+    JumpToPosition(U256),
+    StopExecutionNeedsReturn {
+        // Gas left.
+        //gas: Gas,
+        /// Return data offset.
+        init_off: U256,
+        /// Return data size.
+        init_size: U256,
+        /// Apply or revert state changes.
+        apply: bool,
+    },
+    StopExecution,
+    Trap, //(TrapKind),
 }
 
 struct CodeReader {
-	position: usize, //ProgramCounter,
-	code: Arc<Bytes>,
+    position: usize, //ProgramCounter,
+    code: Arc<Bytes>,
 }
 
 impl CodeReader {
-	/// Create new code reader - starting at position 0.
-	fn new(code: Arc<Bytes>) -> Self {
-		CodeReader {
-			code,
-			position: 0,
-		}
-	}
+    /// Create new code reader - starting at position 0.
+    fn new(code: Arc<Bytes>) -> Self {
+        CodeReader { code, position: 0 }
+    }
 
-	/// Get `no_of_bytes` from code and convert to U256. Move PC
-	fn read(&mut self, no_of_bytes: usize) -> U256 {
-		let pos = self.position;
-		self.position += no_of_bytes;
-		let max = cmp::min(pos + no_of_bytes, self.code.len());
-		U256::from(&self.code[pos..max])
-	}
+    /// Get `no_of_bytes` from code and convert to U256. Move PC
+    fn read(&mut self, no_of_bytes: usize) -> U256 {
+        let pos = self.position;
+        self.position += no_of_bytes;
+        let max = cmp::min(pos + no_of_bytes, self.code.len());
+        U256::from(&self.code[pos..max])
+    }
 
-	fn len(&self) -> usize {
-		self.code.len()
-	}
+    fn len(&self) -> usize {
+        self.code.len()
+    }
 }
 
 fn to_biguint(x: U256) -> BigUint {
@@ -106,7 +105,7 @@ pub struct Interpreter {
     mem: Vec<u8>,
     //cache: Arc<SharedCache>,
     params: InterpreterParams,
-    //reader: CodeReader,
+    reader: CodeReader,
     //return_data: ReturnData,
     //informant: informant::EvmInformant,
     do_trace: bool,
@@ -137,13 +136,14 @@ impl Interpreter {
         InterpreterResult::Done
     }
     fn step_inner(&mut self, ext: &mut Ext) -> Result<Never, InterpreterResult> {
-        let result = match self.resume_result.take(){
+        let result = match self.resume_result.take() {
             Some(result) => result,
             None => {
-
+                let opcode = self.reader.code[self.reader.position];
+                let instruction = Instruction::from_u8(opcode);
 
                 InstructionResult::Ok
-            },
+            }
         };
         Err(InterpreterResult::Continue)
     }

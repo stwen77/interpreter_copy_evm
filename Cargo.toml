@@ -12,4 +12,4 @@ ethereum-types = "0.4"
 bit-set = "0.4"
 parity-bytes = "0.1"
 bytes = "0.4"
-
+lazy_static = "1.0"

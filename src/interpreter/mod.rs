@@ -1,15 +1,21 @@
+mod externalities;
 mod instructions;
+mod raw;
+mod return_data;
 mod stack;
 
 use bit_set::BitSet;
 use bytes::Bytes;
 use ethereum_types::{Address, H256, U256};
+use externalities::Ext;
 use instructions::Instruction;
 use num_bigint::BigUint;
+use raw::*;
+use return_data::*;
+use stack::*;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::{cmp, mem};
-use stack::*;
 
 /// Stepping result returned by interpreter.
 pub enum InterpreterResult {
@@ -108,7 +114,7 @@ pub struct Interpreter {
     //cache: Arc<SharedCache>,
     params: InterpreterParams,
     reader: CodeReader,
-    //return_data: ReturnData,
+    return_data: ReturnData,
     //informant: informant::EvmInformant,
     do_trace: bool,
     done: bool,
@@ -130,7 +136,6 @@ impl Interpreter {
 }
 
 impl Interpreter {
-
     pub fn step(&mut self, ext: &mut Ext) -> InterpreterResult {
         if self.done {
             return InterpreterResult::Stopped;
@@ -171,26 +176,90 @@ impl Interpreter {
         ext: &mut Ext,
         instruction: Instruction,
         provided: usize,
-    ) -> Result<InstructionResult,PubErr> {
+    ) -> Result<InstructionResult, PubErr> {
         match instruction {
-            instructions::JUMP=>{
+            instructions::JUMP => {
                 let jump = self.stack.pop_back();
                 return Ok(InstructionResult::JumpToPosition(jump));
-            },
-            _=> {},
+            }
+            instructions::JUMPI => {
+                let jump = self.stack.pop_back();
+                let condition = self.stack.pop_back();
+                if !condition.is_zero() {
+                    return Ok(InstructionResult::JumpToPosition(jump));
+                }
+            }
+            instructions::CREATE | instructions::CREATE2 => {
+                let endowment = self.stack.pop_back();
+                let init_off = self.stack.pop_back();
+                let init_size = self.stack.pop_back();
+                let address_scheme = match instruction {
+                    instructions::CREATE => CreateContractAddress::FromSenderAndNonce,
+                    instructions::CREATE2 => CreateContractAddress::FromSenderSaltAndCodeHash(
+                        self.stack.pop_back().into(),
+                    ),
+                    _ => unreachable!("instruction can only be CREATE/CREATE2 checked above; qed"),
+                };
+
+                //let create_gas = provided.expect("`provided` comes through Self::exec from `Gasometer::get_gas_cost_mem`; `gas_gas_mem_cost` guarantees `Some` when instruction is `CALL`/`CALLCODE`/`DELEGATECALL`/`CREATE`; this is `CREATE`; qed");
+
+                if ext.is_static() {
+                    return Err(PubErr::None);
+                }
+
+                // clear return data buffer before creating new call frame.
+                self.return_data = ReturnData::empty();
+
+                let can_create = ext.balance(&self.params.address)? >= endowment
+                    && ext.depth() < ext.schedule().max_depth;
+                if !can_create {
+                    self.stack.push(U256::zero());
+                    return Ok(InstructionResult::UnusedGas(create_gas));
+                }
+
+                let contract_code = self.mem.read_slice(init_off, init_size);
+
+                let create_result = ext.create(
+                    &create_gas.as_u256(),
+                    &endowment,
+                    contract_code,
+                    address_scheme,
+                    true,
+                );
+                return match create_result {
+                    Ok(ContractCreateResult::Created(address, gas_left)) => {
+                        self.stack.push(address_to_u256(address));
+                        Ok(InstructionResult::UnusedGas(
+                            Cost::from_u256(gas_left).expect("Gas left cannot be greater."),
+                        ))
+                    }
+                    Ok(ContractCreateResult::Reverted(gas_left, return_data)) => {
+                        self.stack.push(U256::zero());
+                        self.return_data = return_data;
+                        Ok(InstructionResult::UnusedGas(
+                            Cost::from_u256(gas_left).expect("Gas left cannot be greater."),
+                        ))
+                    }
+                    Ok(ContractCreateResult::Failed) => {
+                        self.stack.push(U256::zero());
+                        Ok(InstructionResult::Ok)
+                    }
+                    Err(trap) => Ok(InstructionResult::Trap(trap)),
+                };
+            }
+            _ => {}
         }
         Err(PubErr::None)
     }
 }
 
-pub trait Ext {}
 enum Never {}
 
-enum PubErr{
+enum PubErr {
     None,
 }
 impl From<PubErr> for InterpreterResult {
-	fn from(err: PubErr) -> Self {
-		InterpreterResult::Done
-	}
+    fn from(err: PubErr) -> Self {
+        InterpreterResult::Done
+    }
 }

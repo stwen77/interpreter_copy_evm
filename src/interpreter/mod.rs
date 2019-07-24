@@ -1,5 +1,6 @@
 mod externalities;
 mod instructions;
+mod memory;
 mod raw;
 mod return_data;
 mod schedule;
@@ -8,8 +9,9 @@ mod stack;
 use bit_set::BitSet;
 use bytes::Bytes;
 use ethereum_types::{Address, H256, U256};
-use externalities::Ext;
+use externalities::*;
 use instructions::Instruction;
+use memory::Memory;
 use num_bigint::BigUint;
 use raw::*;
 use return_data::*;
@@ -59,11 +61,11 @@ struct InterpreterParams {
 
 enum InstructionResult {
     Ok,
-    //UnusedGas(Gas),
+    UnusedGas(u32),
     JumpToPosition(U256),
     StopExecutionNeedsReturn {
         // Gas left.
-        //gas: Gas,
+        gas: u32,
         /// Return data offset.
         init_off: U256,
         /// Return data size.
@@ -215,13 +217,13 @@ impl Interpreter {
                     && ext.depth() < ext.schedule().max_depth;
                 if !can_create {
                     self.stack.push(U256::zero());
-                    return Ok(InstructionResult::UnusedGas(create_gas));
+                    return Ok(InstructionResult::UnusedGas(0));
                 }
 
                 let contract_code = self.mem.read_slice(init_off, init_size);
 
                 let create_result = ext.create(
-                    &create_gas.as_u256(),
+                    &U256::from(0), //&create_gas.as_u256(),
                     &endowment,
                     contract_code,
                     address_scheme,
@@ -230,22 +232,18 @@ impl Interpreter {
                 return match create_result {
                     Ok(ContractCreateResult::Created(address, gas_left)) => {
                         self.stack.push(address_to_u256(address));
-                        Ok(InstructionResult::UnusedGas(
-                            Cost::from_u256(gas_left).expect("Gas left cannot be greater."),
-                        ))
+                        Ok(InstructionResult::UnusedGas(0))
                     }
                     Ok(ContractCreateResult::Reverted(gas_left, return_data)) => {
                         self.stack.push(U256::zero());
                         self.return_data = return_data;
-                        Ok(InstructionResult::UnusedGas(
-                            Cost::from_u256(gas_left).expect("Gas left cannot be greater."),
-                        ))
+                        Ok(InstructionResult::UnusedGas(0))
                     }
                     Ok(ContractCreateResult::Failed) => {
                         self.stack.push(U256::zero());
                         Ok(InstructionResult::Ok)
                     }
-                    Err(trap) => Ok(InstructionResult::Trap(trap)),
+                    Err(trap) => Ok(InstructionResult::Trap),
                 };
             }
 
@@ -253,6 +251,14 @@ impl Interpreter {
         }
         Err(())
     }
+}
+
+fn address_to_u256(value: Address) -> U256 {
+    U256::from(&*H256::from(value))
+}
+
+fn u256_to_address(value: &U256) -> Address {
+    Address::from(H256::from(value))
 }
 
 enum Never {}

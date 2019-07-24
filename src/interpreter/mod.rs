@@ -2,6 +2,7 @@ mod externalities;
 mod instructions;
 mod raw;
 mod return_data;
+mod schedule;
 mod stack;
 
 use bit_set::BitSet;
@@ -176,7 +177,7 @@ impl Interpreter {
         ext: &mut Ext,
         instruction: Instruction,
         provided: usize,
-    ) -> Result<InstructionResult, PubErr> {
+    ) -> Result<InstructionResult, ()> {
         match instruction {
             instructions::JUMP => {
                 let jump = self.stack.pop_back();
@@ -204,7 +205,7 @@ impl Interpreter {
                 //let create_gas = provided.expect("`provided` comes through Self::exec from `Gasometer::get_gas_cost_mem`; `gas_gas_mem_cost` guarantees `Some` when instruction is `CALL`/`CALLCODE`/`DELEGATECALL`/`CREATE`; this is `CREATE`; qed");
 
                 if ext.is_static() {
-                    return Err(PubErr::None);
+                    return Err(());
                 }
 
                 // clear return data buffer before creating new call frame.
@@ -247,9 +248,10 @@ impl Interpreter {
                     Err(trap) => Ok(InstructionResult::Trap(trap)),
                 };
             }
+
             _ => {}
         }
-        Err(PubErr::None)
+        Err(())
     }
 }
 

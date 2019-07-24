@@ -1,5 +1,5 @@
+use super::return_data::ReturnData;
 use ethereum_types::{Address, H256, U256};
-use return_data::ReturnData;
 
 /// Specifies how an address is calculated for a new contract.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]

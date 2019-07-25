@@ -166,7 +166,7 @@ impl Interpreter {
                 let requirements_gas = 0;
                 let current_gas = 0; //self.gasometer.as_mut().expect(GASOMETER_PROOF).current_gas;
                 let result =
-                    self.exec_instruction(current_gas, ext, instruction, requirements_gas)?;
+                    self.exec_instruction(current_gas, ext, instruction, requirements_gas).unwrap();
 
                 InstructionResult::Ok
             }

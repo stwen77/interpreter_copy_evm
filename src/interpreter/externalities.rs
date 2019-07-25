@@ -78,61 +78,7 @@ impl Ext for Externalities<'_> {
         code: &[u8],
         address_scheme: CreateContractAddress,
         trap: bool,
-    ) -> ::std::result::Result<ContractCreateResult, TrapKind> {
-        // create new contract address
-        let (address, code_hash) = match self.state.nonce(&self.origin_info.address) {
-            Ok(nonce) => contract_address(address_scheme, &self.origin_info.address, &nonce, &code),
-            Err(e) => {
-                debug!(target: "ext", "Database corruption encountered: {:?}", e);
-                return Ok(ContractCreateResult::Failed);
-            }
-        };
-
-        // prepare the params
-        let params = ActionParams {
-            code_address: address.clone(),
-            address: address.clone(),
-            sender: self.origin_info.address.clone(),
-            origin: self.origin_info.origin.clone(),
-            gas: *gas,
-            gas_price: self.origin_info.gas_price,
-            value: ActionValue::Transfer(*value),
-            code: Some(Arc::new(code.to_vec())),
-            code_hash: code_hash,
-            data: None,
-            call_type: CallType::None,
-            params_type: vm::ParamsType::Embedded,
-        };
-
-        if !self.static_flag {
-            if !self.schedule.keep_unsigned_nonce || params.sender != UNSIGNED_SENDER {
-                if let Err(e) = self.state.inc_nonce(&self.origin_info.address) {
-                    debug!(target: "ext", "Database corruption encountered: {:?}", e);
-                    return Ok(ContractCreateResult::Failed);
-                }
-            }
-        }
-
-        if trap {
-            return Err(TrapKind::Create(params, address));
-        }
-
-        // TODO: handle internal error separately
-        let mut ex = Executive::from_parent(
-            self.state,
-            self.env_info,
-            self.machine,
-            self.schedule,
-            self.depth,
-            self.static_flag,
-        );
-        let out = ex.create_with_crossbeam(
-            params,
-            self.substate,
-            self.stack_depth + 1,
-            self.tracer,
-            self.vm_tracer,
-        );
-        Ok(into_contract_create_result(out, &address, self.substate))
+    ) -> ::std::result::Result<ContractCreateResult, ()> {
+        return Err(());
     }
 }

@@ -1,3 +1,4 @@
+mod call_type;
 mod externalities;
 mod instructions;
 mod memory;
@@ -8,6 +9,7 @@ mod stack;
 
 use bit_set::BitSet;
 use bytes::Bytes;
+use call_type::CallType;
 use ethereum_types::{Address, H256, U256};
 use externalities::*;
 use instructions::Instruction;
@@ -165,8 +167,9 @@ impl Interpreter {
                 // Execute instruction
                 let requirements_gas = 0;
                 let current_gas = 0; //self.gasometer.as_mut().expect(GASOMETER_PROOF).current_gas;
-                let result =
-                    self.exec_instruction(current_gas, ext, instruction, requirements_gas).unwrap();
+                let result = self
+                    .exec_instruction(current_gas, ext, instruction, requirements_gas)
+                    .unwrap();
 
                 InstructionResult::Ok
             }
@@ -175,7 +178,7 @@ impl Interpreter {
     }
     fn exec_instruction(
         &mut self,
-        gas: usize,
+        gas: u32,
         ext: &mut Ext,
         instruction: Instruction,
         provided: usize,
@@ -246,7 +249,179 @@ impl Interpreter {
                     Err(trap) => Ok(InstructionResult::Trap),
                 };
             }
+            instructions::CALL
+            | instructions::CALLCODE
+            | instructions::DELEGATECALL
+            | instructions::STATICCALL => {
+                assert!(
+                    ext.schedule().call_value_transfer_gas > ext.schedule().call_stipend,
+                    "overflow possible"
+                );
 
+                self.stack.pop_back();
+                let call_gas = 0;
+                let code_address = self.stack.pop_back();
+                let code_address = u256_to_address(&code_address);
+
+                let value = if instruction == instructions::DELEGATECALL {
+                    None
+                } else if instruction == instructions::STATICCALL {
+                    Some(U256::zero())
+                } else {
+                    Some(self.stack.pop_back())
+                };
+
+                let in_off = self.stack.pop_back();
+                let in_size = self.stack.pop_back();
+                let out_off = self.stack.pop_back();
+                let out_size = self.stack.pop_back();
+
+                // Add stipend (only CALL|CALLCODE when value > 0)
+                let call_gas = 0;
+
+                // Get sender & receive addresses, check if we have balance
+                let (sender_address, receive_address, has_balance, call_type) = match instruction {
+                    instructions::CALL => {
+                        if ext.is_static() && value.map_or(false, |v| !v.is_zero()) {
+                            return Err(());
+                        }
+                        let has_balance = ext.balance(&self.params.address)?
+                            >= value.expect("value set for all but delegate call; qed");
+                        (
+                            &self.params.address,
+                            &code_address,
+                            has_balance,
+                            CallType::Call,
+                        )
+                    }
+                    instructions::CALLCODE => {
+                        let has_balance = ext.balance(&self.params.address)?
+                            >= value.expect("value set for all but delegate call; qed");
+                        (
+                            &self.params.address,
+                            &self.params.address,
+                            has_balance,
+                            CallType::CallCode,
+                        )
+                    }
+                    instructions::DELEGATECALL => (
+                        &self.params.sender,
+                        &self.params.address,
+                        true,
+                        CallType::DelegateCall,
+                    ),
+                    instructions::STATICCALL => (
+                        &self.params.address,
+                        &code_address,
+                        true,
+                        CallType::StaticCall,
+                    ),
+                    _ => panic!(format!(
+                        "Unexpected instruction {:?} in CALL branch.",
+                        instruction
+                    )),
+                };
+
+                // clear return data buffer before creating new call frame.
+                self.return_data = ReturnData::empty();
+
+                let can_call = has_balance && ext.depth() < ext.schedule().max_depth;
+                if !can_call {
+                    self.stack.push(U256::zero());
+                    return Ok(InstructionResult::UnusedGas(call_gas));
+                }
+
+                let call_result = {
+                    let input = self.mem.read_slice(in_off, in_size);
+                    ext.call(
+                        &U256::from(call_gas),
+                        sender_address,
+                        receive_address,
+                        value,
+                        input,
+                        &code_address,
+                        call_type,
+                        true,
+                    )
+                };
+
+                self.resume_output_range = Some((out_off, out_size));
+
+                return match call_result {
+                    Ok(MessageCallResult::Success(gas_left, data)) => {
+                        let output = self.mem.writeable_slice(out_off, out_size);
+                        let len = cmp::min(output.len(), data.len());
+                        (&mut output[..len]).copy_from_slice(&data[..len]);
+
+                        self.stack.push(U256::one());
+                        self.return_data = data;
+                        Ok(InstructionResult::UnusedGas(0))
+                    }
+                    Ok(MessageCallResult::Reverted(gas_left, data)) => {
+                        let output = self.mem.writeable_slice(out_off, out_size);
+                        let len = cmp::min(output.len(), data.len());
+                        (&mut output[..len]).copy_from_slice(&data[..len]);
+
+                        self.stack.push(U256::zero());
+                        self.return_data = data;
+                        Ok(InstructionResult::UnusedGas(0))
+                    }
+                    Ok(MessageCallResult::Failed) => {
+                        self.stack.push(U256::zero());
+                        Ok(InstructionResult::Ok)
+                    }
+                    Err(trap) => Ok(InstructionResult::Trap),
+                };
+            }
+            instructions::RETURN => {
+                let init_off = self.stack.pop_back();
+                let init_size = self.stack.pop_back();
+
+                return Ok(InstructionResult::StopExecutionNeedsReturn {
+                    gas: gas,
+                    init_off: init_off,
+                    init_size: init_size,
+                    apply: true,
+                });
+            }
+            instructions::REVERT => {
+                let init_off = self.stack.pop_back();
+                let init_size = self.stack.pop_back();
+
+                return Ok(InstructionResult::StopExecutionNeedsReturn {
+                    gas: gas,
+                    init_off: init_off,
+                    init_size: init_size,
+                    apply: false,
+                });
+            }
+            instructions::STOP => {
+                return Ok(InstructionResult::StopExecution);
+            }
+            instructions::SUICIDE => {
+                let address = self.stack.pop_back();
+                //ext.suicide(&u256_to_address(&address))?;
+                return Ok(InstructionResult::StopExecution);
+            }
+            instructions::LOG0
+            | instructions::LOG1
+            | instructions::LOG2
+            | instructions::LOG3
+            | instructions::LOG4 => {
+                let no_of_topics = instruction
+                    .log_topics()
+                    .expect("log_topics always return some for LOG* instructions; qed");
+
+                let offset = self.stack.pop_back();
+                let size = self.stack.pop_back();
+                let topics:Vec<H256> = self
+                    .stack
+                    .pop_n(no_of_topics)
+                    .iter()
+                    .map(H256::from)
+                    .collect();
+                //ext.log(topics, self.mem.read_slice(offset, size))?;
+            }
             _ => {}
         }
         Err(())

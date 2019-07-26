@@ -1,7 +1,21 @@
+use super::call_type::CallType;
 use super::return_data::ReturnData;
 use super::schedule::*;
 use ethereum_types::{Address, H256, U256};
 
+#[derive(Debug)]
+/// Result of externalities call function.
+pub enum MessageCallResult {
+    /// Returned when message call was successfull.
+    /// Contains gas left and output data.
+    Success(U256, ReturnData),
+    /// Returned when message call failed.
+    /// VM doesn't have to know the reason.
+    Failed,
+    /// Returned when message call was reverted.
+    /// Contains gas left and output data.
+    Reverted(U256, ReturnData),
+}
 /// Specifies how an address is calculated for a new contract.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Hash)]
 pub enum CreateContractAddress {
@@ -49,6 +63,22 @@ pub trait Ext {
         address: CreateContractAddress,
         trap: bool,
     ) -> Result<ContractCreateResult, ()>;
+    /// Message call.
+    ///
+    /// Returns Err, if we run out of gas.
+    /// Otherwise returns call_result which contains gas left
+    /// and true if subcall was successfull.
+    fn call(
+        &mut self,
+        gas: &U256,
+        sender_address: &Address,
+        receive_address: &Address,
+        value: Option<U256>,
+        data: &[u8],
+        code_address: &Address,
+        call_type: CallType,
+        trap: bool,
+    ) -> ::std::result::Result<MessageCallResult, ()>;
 }
 pub struct Externalities<'a> {
     depth: usize,
@@ -79,6 +109,19 @@ impl Ext for Externalities<'_> {
         address_scheme: CreateContractAddress,
         trap: bool,
     ) -> ::std::result::Result<ContractCreateResult, ()> {
+        return Err(());
+    }
+    fn call(
+        &mut self,
+        gas: &U256,
+        sender_address: &Address,
+        receive_address: &Address,
+        value: Option<U256>,
+        data: &[u8],
+        code_address: &Address,
+        call_type: CallType,
+        trap: bool,
+    ) -> ::std::result::Result<MessageCallResult, ()> {
         return Err(());
     }
 }

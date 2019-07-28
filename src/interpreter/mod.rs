@@ -414,7 +414,7 @@ impl Interpreter {
 
                 let offset = self.stack.pop_back();
                 let size = self.stack.pop_back();
-                let topics:Vec<H256> = self
+                let topics: Vec<H256> = self
                     .stack
                     .pop_n(no_of_topics)
                     .iter()
@@ -422,6 +422,73 @@ impl Interpreter {
                     .collect();
                 //ext.log(topics, self.mem.read_slice(offset, size))?;
             }
+            instructions::PUSH1
+            | instructions::PUSH2
+            | instructions::PUSH3
+            | instructions::PUSH4
+            | instructions::PUSH5
+            | instructions::PUSH6
+            | instructions::PUSH7
+            | instructions::PUSH8
+            | instructions::PUSH9
+            | instructions::PUSH10
+            | instructions::PUSH11
+            | instructions::PUSH12
+            | instructions::PUSH13
+            | instructions::PUSH14
+            | instructions::PUSH15
+            | instructions::PUSH16
+            | instructions::PUSH17
+            | instructions::PUSH18
+            | instructions::PUSH19
+            | instructions::PUSH20
+            | instructions::PUSH21
+            | instructions::PUSH22
+            | instructions::PUSH23
+            | instructions::PUSH24
+            | instructions::PUSH25
+            | instructions::PUSH26
+            | instructions::PUSH27
+            | instructions::PUSH28
+            | instructions::PUSH29
+            | instructions::PUSH30
+            | instructions::PUSH31
+            | instructions::PUSH32 => {
+                let bytes = instruction
+                    .push_bytes()
+                    .expect("push_bytes always return some for PUSH* instructions");
+                let val = self.reader.read(bytes);
+                self.stack.push(val);
+            }
+            instructions::MLOAD => {
+                let word = self.mem.read(self.stack.pop_back());
+                self.stack.push(U256::from(word));
+            }
+			instructions::MSTORE => {
+				let offset = self.stack.pop_back();
+				let word = self.stack.pop_back();
+				Memory::write(&mut self.mem, offset, word);
+			},
+			instructions::MSTORE8 => {
+				let offset = self.stack.pop_back();
+				let byte = self.stack.pop_back();
+				self.mem.write_byte(offset, byte);
+			},
+			instructions::MSIZE => {
+				self.stack.push(U256::from(self.mem.size()));
+			},
+			instructions::SHA3 => {
+				let offset = self.stack.pop_back();
+				let size = self.stack.pop_back();
+				//to do let k = keccak(self.mem.read_slice(offset, size));
+				//to do self.stack.push(U256::from(&*k));
+			},
+			instructions::SLOAD => {
+				let key = H256::from(&self.stack.pop_back());
+				//let word = U256::from(&*ext.storage_at(&key)?);
+				//self.stack.push(word);
+			},
+
             _ => {}
         }
         Err(())

@@ -22,6 +22,17 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::{cmp, mem};
 
+const ONE: U256 = U256([1, 0, 0, 0]);
+const TWO: U256 = U256([2, 0, 0, 0]);
+const TWO_POW_5: U256 = U256([0x20, 0, 0, 0]);
+const TWO_POW_8: U256 = U256([0x100, 0, 0, 0]);
+const TWO_POW_16: U256 = U256([0x10000, 0, 0, 0]);
+const TWO_POW_24: U256 = U256([0x1000000, 0, 0, 0]);
+const TWO_POW_64: U256 = U256([0, 0x1, 0, 0]); // 0x1 00000000 00000000
+const TWO_POW_96: U256 = U256([0, 0x100000000, 0, 0]); //0x1 00000000 00000000 00000000
+const TWO_POW_224: U256 = U256([0, 0, 0, 0x100000000]); //0x1 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+const TWO_POW_248: U256 = U256([0, 0, 0, 0x100000000000000]); //0x1 00000000 00000000 00000000 00000000 00000000 00000000 00000000 000000
+
 /// Stepping result returned by interpreter.
 pub enum InterpreterResult {
     /// The VM has already stopped.
@@ -56,7 +67,7 @@ struct InterpreterParams {
     /// Input data.
     pub data: Option<Bytes>,
     // Type of call
-    //pub call_type: CallType,
+    pub call_type: CallType,
     // Param types encoding
     //pub params_type: ParamsType,
 }
@@ -112,6 +123,20 @@ fn to_biguint(x: U256) -> BigUint {
 fn from_biguint(x: BigUint) -> U256 {
     let bytes = x.to_bytes_le();
     U256::from_little_endian(&bytes)
+}
+
+fn get_and_reset_sign(value: U256) -> (U256, bool) {
+    let U256(arr) = value;
+    let sign = arr[3].leading_zeros() == 0;
+    (set_sign(value, sign), sign)
+}
+
+fn set_sign(value: U256, sign: bool) -> U256 {
+    if sign {
+        (!U256::zero() ^ value).overflowing_add(U256::one()).0
+    } else {
+        value
+    }
 }
 
 pub struct Interpreter {
@@ -464,35 +489,286 @@ impl Interpreter {
                 let word = self.mem.read(self.stack.pop_back());
                 self.stack.push(U256::from(word));
             }
-			instructions::MSTORE => {
-				let offset = self.stack.pop_back();
-				let word = self.stack.pop_back();
-				Memory::write(&mut self.mem, offset, word);
-			},
-			instructions::MSTORE8 => {
-				let offset = self.stack.pop_back();
-				let byte = self.stack.pop_back();
-				self.mem.write_byte(offset, byte);
-			},
-			instructions::MSIZE => {
-				self.stack.push(U256::from(self.mem.size()));
-			},
-			instructions::SHA3 => {
-				let offset = self.stack.pop_back();
-				let size = self.stack.pop_back();
-				//to do let k = keccak(self.mem.read_slice(offset, size));
-				//to do self.stack.push(U256::from(&*k));
-			},
-			instructions::SLOAD => {
-				let key = H256::from(&self.stack.pop_back());
-				//let word = U256::from(&*ext.storage_at(&key)?);
-				//self.stack.push(word);
-			},
+            instructions::MSTORE => {
+                let offset = self.stack.pop_back();
+                let word = self.stack.pop_back();
+                Memory::write(&mut self.mem, offset, word);
+            }
+            instructions::MSTORE8 => {
+                let offset = self.stack.pop_back();
+                let byte = self.stack.pop_back();
+                self.mem.write_byte(offset, byte);
+            }
+            instructions::MSIZE => {
+                self.stack.push(U256::from(self.mem.size()));
+            }
+            instructions::SHA3 => {
+                let offset = self.stack.pop_back();
+                let size = self.stack.pop_back();
+                //to do let k = keccak(self.mem.read_slice(offset, size));
+                //to do self.stack.push(U256::from(&*k));
+            }
+            instructions::SLOAD => {
+                let key = H256::from(&self.stack.pop_back());
+                //let word = U256::from(&*ext.storage_at(&key)?);
+                //self.stack.push(word);
+            }
+            instructions::SSTORE => {
+                //to do
+            }
+            instructions::PC => {
+                self.stack.push(U256::from(self.reader.position - 1));
+            }
+            instructions::GAS => {
+                self.stack.push(U256::from(gas));
+            }
+            instructions::ADDRESS => {
+                self.stack
+                    .push(address_to_u256(self.params.address.clone()));
+            }
+            instructions::ORIGIN => {
+                self.stack.push(address_to_u256(self.params.origin.clone()));
+            }
+            instructions::BALANCE => {
+                let address = u256_to_address(&self.stack.pop_back());
+                let balance = ext.balance(&address)?;
+                self.stack.push(balance);
+            }
+            instructions::CALLER => {
+                self.stack.push(address_to_u256(self.params.sender.clone()));
+            }
+            instructions::CALLVALUE => {
+                //to do
+            }
+            instructions::CALLDATALOAD => {
+                let big_id = self.stack.pop_back();
+                let id = big_id.low_u64() as usize;
+                let max = id.wrapping_add(32);
+                if let Some(data) = self.params.data.as_ref() {
+                    let bound = cmp::min(data.len(), max);
+                    if id < bound && big_id < U256::from(data.len()) {
+                        let mut v = [0u8; 32];
+                        v[0..bound - id].clone_from_slice(&data[id..bound]);
+                        self.stack.push(U256::from(&v[..]))
+                    } else {
+                        self.stack.push(U256::zero())
+                    }
+                } else {
+                    self.stack.push(U256::zero())
+                }
+            }
+            instructions::CALLDATASIZE => {
+                self.stack
+                    .push(U256::from(self.params.data.as_ref().map_or(0, |l| l.len())));
+            }
+            instructions::CODESIZE => {
+                self.stack.push(U256::from(self.reader.len()));
+            }
+            instructions::RETURNDATASIZE => self.stack.push(U256::from(self.return_data.len())),
+            instructions::EXTCODESIZE => {
+                let address = u256_to_address(&self.stack.pop_back());
+                //let len = ext.extcodesize(&address)?.unwrap_or(0);
+                //self.stack.push(U256::from(len));
+            }
+            instructions::CALLDATACOPY => {
+                //Self::copy_data_to_memory(&mut self.mem, &mut self.stack, &self.params.data.as_ref().map_or_else(|| &[] as &[u8], |d| &*d as &[u8]));
+            }
+            instructions::RETURNDATACOPY => {
+                {
+                    let source_offset = self.stack.peek(1);
+                    let size = self.stack.peek(2);
+                    let return_data_len = U256::from(self.return_data.len());
+                    //if source_offset.saturating_add(*size) > return_data_len
+                    {
+                        //return Err(vm::Error::OutOfBounds);
+                    }
+                }
+                //Self::copy_data_to_memory(&mut self.mem, &mut self.stack, &*self.return_data);
+            }
+            instructions::CODECOPY => {
+                //Self::copy_data_to_memory(&mut self.mem, &mut self.stack, &self.reader.code);
+            }
+            instructions::EXTCODECOPY => {
+                let address = u256_to_address(&self.stack.pop_back());
+                //let code = ext.extcode(&address)?;
+                //Self::copy_data_to_memory(&mut self.mem,&mut self.stack,code.as_ref().map(|c| &(*c)[..]).unwrap_or(&[])	);
+            }
+            instructions::GASPRICE => {
+                self.stack.push(self.params.gas_price.clone());
+            }
+            instructions::BLOCKHASH => {
+                let block_number = self.stack.pop_back();
+                //let block_hash = ext.blockhash(&block_number);
+                //self.stack.push(U256::from(&*block_hash));
+            }
+            instructions::COINBASE => {
+                //self.stack.push(address_to_u256(ext.env_info().author.clone()));
+            }
+            instructions::TIMESTAMP => {
+                //self.stack.push(U256::from(ext.env_info().timestamp));
+            }
+            instructions::NUMBER => {
+                //self.stack.push(U256::from(ext.env_info().number));
+            }
+            instructions::DIFFICULTY => {
+                //self.stack.push(ext.env_info().difficulty.clone());
+            }
+            instructions::GASLIMIT => {
+                //self.stack.push(ext.env_info().gas_limit.clone());
+            }
+            instructions::DUP1
+            | instructions::DUP2
+            | instructions::DUP3
+            | instructions::DUP4
+            | instructions::DUP5
+            | instructions::DUP6
+            | instructions::DUP7
+            | instructions::DUP8
+            | instructions::DUP9
+            | instructions::DUP10
+            | instructions::DUP11
+            | instructions::DUP12
+            | instructions::DUP13
+            | instructions::DUP14
+            | instructions::DUP15
+            | instructions::DUP16 => {
+                let position = instruction
+                    .dup_position()
+                    .expect("dup_position always return some for DUP* instructions");
+                let val = self.stack.peek(position).clone();
+                self.stack.push(val);
+            }
+            instructions::SWAP1
+            | instructions::SWAP2
+            | instructions::SWAP3
+            | instructions::SWAP4
+            | instructions::SWAP5
+            | instructions::SWAP6
+            | instructions::SWAP7
+            | instructions::SWAP8
+            | instructions::SWAP9
+            | instructions::SWAP10
+            | instructions::SWAP11
+            | instructions::SWAP12
+            | instructions::SWAP13
+            | instructions::SWAP14
+            | instructions::SWAP15
+            | instructions::SWAP16 => {
+                let position = instruction
+                    .swap_position()
+                    .expect("swap_position always return some for SWAP* instructions");
+                self.stack.swap_with_top(position)
+            }
+            instructions::POP => {
+                self.stack.pop_back();
+            }
+            instructions::ADD => {
+                let a = self.stack.pop_back();
+                let b = self.stack.pop_back();
+                self.stack.push(a.overflowing_add(b).0);
+            }
+            instructions::MUL => {
+                let a = self.stack.pop_back();
+                let b = self.stack.pop_back();
+                self.stack.push(a.overflowing_mul(b).0);
+            }
+            instructions::SUB => {
+                let a = self.stack.pop_back();
+                let b = self.stack.pop_back();
+                self.stack.push(a.overflowing_sub(b).0);
+            }
+            instructions::DIV => {
+                let a = self.stack.pop_back();
+                let b = self.stack.pop_back();
+                self.stack.push(if !b.is_zero() {
+                    match b {
+                        ONE => a,
+                        TWO => a >> 1,
+                        TWO_POW_5 => a >> 5,
+                        TWO_POW_8 => a >> 8,
+                        TWO_POW_16 => a >> 16,
+                        TWO_POW_24 => a >> 24,
+                        TWO_POW_64 => a >> 64,
+                        TWO_POW_96 => a >> 96,
+                        TWO_POW_224 => a >> 224,
+                        TWO_POW_248 => a >> 248,
+                        _ => a / b,
+                    }
+                } else {
+                    U256::zero()
+                });
+            }
+            instructions::MOD => {
+                let a = self.stack.pop_back();
+                let b = self.stack.pop_back();
+                self.stack
+                    .push(if !b.is_zero() { a % b } else { U256::zero() });
+            }
+            instructions::SDIV => {
+                let (a, sign_a) = get_and_reset_sign(self.stack.pop_back());
+                let (b, sign_b) = get_and_reset_sign(self.stack.pop_back());
 
+                // -2^255
+                let min = (U256::one() << 255) - U256::one();
+                self.stack.push(if b.is_zero() {
+                    U256::zero()
+                } else if a == min && b == !U256::zero() {
+                    min
+                } else {
+                    let c = a / b;
+                    set_sign(c, sign_a ^ sign_b)
+                });
+            }
+            instructions::SMOD => {
+                let ua = self.stack.pop_back();
+                let ub = self.stack.pop_back();
+                let (a, sign_a) = get_and_reset_sign(ua);
+                let b = get_and_reset_sign(ub).0;
+
+                self.stack.push(if !b.is_zero() {
+                    let c = a % b;
+                    set_sign(c, sign_a)
+                } else {
+                    U256::zero()
+                });
+            }
+            instructions::EXP => {
+                let base = self.stack.pop_back();
+                let expon = self.stack.pop_back();
+                let res = base.overflowing_pow(expon).0;
+                self.stack.push(res);
+            }
+            instructions::NOT => {
+                let a = self.stack.pop_back();
+                self.stack.push(!a);
+            }
+            instructions::LT => {
+                let a = self.stack.pop_back();
+                let b = self.stack.pop_back();
+                self.stack.push(Self::bool_to_u256(a < b));
+            }
+			instructions::SLT => {
+				let (a, neg_a) = get_and_reset_sign(self.stack.pop_back());
+				let (b, neg_b) = get_and_reset_sign(self.stack.pop_back());
+
+				let is_positive_lt = a < b && !(neg_a | neg_b);
+				let is_negative_lt = a > b && (neg_a & neg_b);
+				let has_different_signs = neg_a && !neg_b;
+
+				self.stack.push(Self::bool_to_u256(is_positive_lt | is_negative_lt | has_different_signs));
+			},
             _ => {}
         }
         Err(())
     }
+
+    fn bool_to_u256(val: bool) -> U256 {
+		if val {
+			U256::one()
+		} else {
+			U256::zero()
+		}
+	}
 }
 
 fn address_to_u256(value: Address) -> U256 {

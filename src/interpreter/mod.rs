@@ -747,28 +747,177 @@ impl Interpreter {
                 let b = self.stack.pop_back();
                 self.stack.push(Self::bool_to_u256(a < b));
             }
-			instructions::SLT => {
-				let (a, neg_a) = get_and_reset_sign(self.stack.pop_back());
-				let (b, neg_b) = get_and_reset_sign(self.stack.pop_back());
+            instructions::SLT => {
+                let (a, neg_a) = get_and_reset_sign(self.stack.pop_back());
+                let (b, neg_b) = get_and_reset_sign(self.stack.pop_back());
 
-				let is_positive_lt = a < b && !(neg_a | neg_b);
-				let is_negative_lt = a > b && (neg_a & neg_b);
-				let has_different_signs = neg_a && !neg_b;
+                let is_positive_lt = a < b && !(neg_a | neg_b);
+                let is_negative_lt = a > b && (neg_a & neg_b);
+                let has_different_signs = neg_a && !neg_b;
 
-				self.stack.push(Self::bool_to_u256(is_positive_lt | is_negative_lt | has_different_signs));
-			},
+                self.stack.push(Self::bool_to_u256(
+                    is_positive_lt | is_negative_lt | has_different_signs,
+                ));
+            }
+            instructions::GT => {
+                let a = self.stack.pop_back();
+                let b = self.stack.pop_back();
+                self.stack.push(Self::bool_to_u256(a > b));
+            }
+            instructions::SGT => {
+                let (a, neg_a) = get_and_reset_sign(self.stack.pop_back());
+                let (b, neg_b) = get_and_reset_sign(self.stack.pop_back());
+
+                let is_positive_gt = a > b && !(neg_a | neg_b);
+                let is_negative_gt = a < b && (neg_a & neg_b);
+                let has_different_signs = !neg_a && neg_b;
+
+                self.stack.push(Self::bool_to_u256(
+                    is_positive_gt | is_negative_gt | has_different_signs,
+                ));
+            }
+            instructions::EQ => {
+                let a = self.stack.pop_back();
+                let b = self.stack.pop_back();
+                self.stack.push(Self::bool_to_u256(a == b));
+            }
+            instructions::ISZERO => {
+                let a = self.stack.pop_back();
+                self.stack.push(Self::bool_to_u256(a.is_zero()));
+            }
+            instructions::AND => {
+                let a = self.stack.pop_back();
+                let b = self.stack.pop_back();
+                self.stack.push(a & b);
+            }
+            instructions::OR => {
+                let a = self.stack.pop_back();
+                let b = self.stack.pop_back();
+                self.stack.push(a | b);
+            }
+            instructions::XOR => {
+                let a = self.stack.pop_back();
+                let b = self.stack.pop_back();
+                self.stack.push(a ^ b);
+            }
+            instructions::BYTE => {
+                let word = self.stack.pop_back();
+                let val = self.stack.pop_back();
+                let byte = match word < U256::from(32) {
+                    true => (val >> (8 * (31 - word.low_u64() as usize))) & U256::from(0xff),
+                    false => U256::zero(),
+                };
+                self.stack.push(byte);
+            }
+            instructions::ADDMOD => {
+                let a = self.stack.pop_back();
+                let b = self.stack.pop_back();
+                let c = self.stack.pop_back();
+
+                self.stack.push(if !c.is_zero() {
+                    let a_num = to_biguint(a);
+                    let b_num = to_biguint(b);
+                    let c_num = to_biguint(c);
+                    let res = a_num + b_num;
+                    let x = res % c_num;
+                    from_biguint(x)
+                } else {
+                    U256::zero()
+                });
+            }
+            instructions::MULMOD => {
+                let a = self.stack.pop_back();
+                let b = self.stack.pop_back();
+                let c = self.stack.pop_back();
+
+                self.stack.push(if !c.is_zero() {
+                    let a_num = to_biguint(a);
+                    let b_num = to_biguint(b);
+                    let c_num = to_biguint(c);
+                    let res = a_num * b_num;
+                    let x = res % c_num;
+                    from_biguint(x)
+                } else {
+                    U256::zero()
+                });
+            }
+            instructions::SIGNEXTEND => {
+                let bit = self.stack.pop_back();
+                if bit < U256::from(32) {
+                    let number = self.stack.pop_back();
+                    let bit_position = (bit.low_u64() * 8 + 7) as usize;
+
+                    let bit = number.bit(bit_position);
+                    let mask = (U256::one() << bit_position) - U256::one();
+                    self.stack
+                        .push(if bit { number | !mask } else { number & mask });
+                }
+            }
+            instructions::SHL => {
+                const CONST_256: U256 = U256([256, 0, 0, 0]);
+
+                let shift = self.stack.pop_back();
+                let value = self.stack.pop_back();
+
+                let result = if shift >= CONST_256 {
+                    U256::zero()
+                } else {
+                    value << (shift.as_u32() as usize)
+                };
+                self.stack.push(result);
+            }
+            instructions::SHR => {
+                const CONST_256: U256 = U256([256, 0, 0, 0]);
+
+                let shift = self.stack.pop_back();
+                let value = self.stack.pop_back();
+
+                let result = if shift >= CONST_256 {
+                    U256::zero()
+                } else {
+                    value >> (shift.as_u32() as usize)
+                };
+                self.stack.push(result);
+            }
+            instructions::SAR => {
+                // We cannot use get_and_reset_sign/set_sign here, because the rounding looks different.
+
+                const CONST_256: U256 = U256([256, 0, 0, 0]);
+                const CONST_HIBIT: U256 = U256([0, 0, 0, 0x8000000000000000]);
+
+                let shift = self.stack.pop_back();
+                let value = self.stack.pop_back();
+                let sign = value & CONST_HIBIT != U256::zero();
+
+                let result = if shift >= CONST_256 {
+                    if sign {
+                        U256::max_value()
+                    } else {
+                        U256::zero()
+                    }
+                } else {
+                    let shift = shift.as_u32() as usize;
+                    let mut shifted = value >> shift;
+                    if sign {
+                        shifted = shifted | (U256::max_value() << (256 - shift));
+                    }
+                    shifted
+                };
+                self.stack.push(result);
+            }
+
             _ => {}
         }
         Err(())
     }
 
     fn bool_to_u256(val: bool) -> U256 {
-		if val {
-			U256::one()
-		} else {
-			U256::zero()
-		}
-	}
+        if val {
+            U256::one()
+        } else {
+            U256::zero()
+        }
+    }
 }
 
 fn address_to_u256(value: Address) -> U256 {

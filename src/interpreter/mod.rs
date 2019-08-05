@@ -46,7 +46,7 @@ pub enum InterpreterResult {
 
 /// ActionParams without code, so that it can be feed into CodeReader.
 #[derive(Debug)]
-struct InterpreterParams {
+pub struct InterpreterParams {
     /// Address of currently executed code.
     pub code_address: Address,
     /// Hash of currently executed code.
@@ -158,9 +158,37 @@ pub struct Interpreter {
 }
 
 impl Interpreter {
-    fn exec(mut self: Box<Self>, ext: &mut Ext) {
+    pub fn new(mut params: InterpreterParams) -> Interpreter{
+        let reader = CodeReader::new(Default::default());
+
+        Interpreter {
+            mem: Vec::new(),
+            //cache: Arc<SharedCache>,
+            params: params,
+            reader: reader,
+            return_data: ReturnData::empty(),
+            //informant: informant::EvmInformant,
+            do_trace: false,
+            done: false,
+            valid_jump_destinations: None,
+            //gasometer: Option<Gasometer<Cost>>,
+            stack: VecStack::with_capacity(10000, U256::zero()),
+            resume_output_range: None,
+            resume_result: None,
+            last_stack_ret_len: 0,
+            //_type: PhantomData<Cost>,
+        }
+        
+    }
+    fn exec(mut self: Box<Self>, ext: &mut Ext) -> Result<(), ()> {
         loop {
             let result = self.step(ext);
+            match result {
+                InterpreterResult::Continue => {}
+                InterpreterResult::Done => return Ok(()),
+                InterpreterResult::Trap => return Err(()),
+                InterpreterResult::Stopped => panic!("Attempted to execute an already stopped VM."),
+            }
         }
     }
 }
@@ -196,9 +224,15 @@ impl Interpreter {
                     .exec_instruction(current_gas, ext, instruction, requirements_gas)
                     .unwrap();
 
-                InstructionResult::Ok
+                result
             }
         };
+        //Advance
+        match result {
+            _ => {
+                return Err(InterpreterResult::Continue);
+            }
+        }
         Err(InterpreterResult::Continue)
     }
     fn exec_instruction(
@@ -571,7 +605,15 @@ impl Interpreter {
                 //self.stack.push(U256::from(len));
             }
             instructions::CALLDATACOPY => {
-                //Self::copy_data_to_memory(&mut self.mem, &mut self.stack, &self.params.data.as_ref().map_or_else(|| &[] as &[u8], |d| &*d as &[u8]));
+                Self::copy_data_to_memory(
+                    &mut self.mem,
+                    &mut self.stack,
+                    &self
+                        .params
+                        .data
+                        .as_ref()
+                        .map_or_else(|| &[] as &[u8], |d| &*d as &[u8]),
+                );
             }
             instructions::RETURNDATACOPY => {
                 {
@@ -908,7 +950,40 @@ impl Interpreter {
 
             _ => {}
         }
-        Err(())
+        Ok(InstructionResult::Ok)
+    }
+
+    fn copy_data_to_memory(mem: &mut Vec<u8>, stack: &mut Stack<U256>, source: &[u8]) {
+        let dest_offset = stack.pop_back();
+        let source_offset = stack.pop_back();
+        let size = stack.pop_back();
+        let source_size = U256::from(source.len());
+
+        let output_end = match source_offset > source_size
+            || size > source_size
+            || source_offset + size > source_size
+        {
+            true => {
+                let zero_slice = if source_offset > source_size {
+                    mem.writeable_slice(dest_offset, size)
+                } else {
+                    mem.writeable_slice(
+                        dest_offset + source_size - source_offset,
+                        source_offset + size - source_size,
+                    )
+                };
+                for i in zero_slice.iter_mut() {
+                    *i = 0;
+                }
+                source.len()
+            }
+            false => (size.low_u64() + source_offset.low_u64()) as usize,
+        };
+
+        if source_offset < source_size {
+            let output_begin = source_offset.low_u64() as usize;
+            mem.write_slice(dest_offset, &source[output_begin..output_end]);
+        }
     }
 
     fn bool_to_u256(val: bool) -> U256 {
